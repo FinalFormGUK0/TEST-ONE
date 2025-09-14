@@ -1,0 +1,100 @@
+name: Call RDP email
+
+on:
+  workflow_dispatch:    # manual trigger
+  
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide trigger type
+        id: context
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "trigger_type=scheduled" >> "$GITHUB_OUTPUT"
+          else
+            echo "trigger_type=manual" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Get last run ID of RDP email
+        id: last_run
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          run_id=$(gh run list \
+            --workflow "RDP email" \
+            --repo "${{ github.repository }}" \
+            --branch "${{ github.ref_name }}" \
+            --limit 1 \
+            --json databaseId \
+            --jq ".[0].databaseId")
+          echo "last_run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Get last run ID of Stand by
+        id: standby_run
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          run_id=$(gh run list \
+            --workflow "Stand by" \
+            --repo "${{ github.repository }}" \
+            --branch "${{ github.ref_name }}" \
+            --limit 1 \
+            --json databaseId \
+            --jq ".[0].databaseId")
+          echo "standby_run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      
+      - name: Rerun RDP email workflow
+        if: steps.last_run.outputs.last_run_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          echo "🔁 Rerunning RDP email workflow run ID: ${{ steps.last_run.outputs.last_run_id }}"
+          gh run rerun ${{ steps.last_run.outputs.last_run_id }} --repo "${{ github.repository }}"
+      
+      - name: Rerun Stand by workflow
+        if: steps.standby_run.outputs.standby_run_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          echo "🔁 Rerunning Stand by workflow run ID: ${{ steps.standby_run.outputs.standby_run_id }}"
+          gh run rerun ${{ steps.standby_run.outputs.standby_run_id }} --repo "${{ github.repository }}"
+
+      - name: Send RDP Trigger Notification
+        if: always()  # Send notification regardless of workflow status
+        env:
+          EMAIL_SMTP_USER: ${{ secrets.EMAIL_SMTP_USER }}
+          EMAIL_SMTP_PASS: ${{ secrets.EMAIL_SMTP_PASS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: |
+          echo "📧 Sending RDP trigger notification email..."
+          
+          # Check if email credentials are configured
+          if [ -z "$EMAIL_SMTP_USER" ] || [ -z "$EMAIL_SMTP_PASS" ]; then
+              echo "⚠️ Email credentials not configured, skipping notification"
+              exit 0
+          fi
+          
+          # Send notification using curl
+          subject="RDP Successfully Triggered"
+          body="RDP workflows have been successfully triggered. Please wait for the RDP access codes to be sent to your email. The system will monitor for 6 hours or until you send 'Stop_rdp' via Telegram."
+          
+          # Create proper email format
+          email_content="From: $EMAIL_FROM\nTo: $EMAIL_TO\nSubject: $subject\n\n$body"
+          
+          if curl -s --url 'smtps://smtp.gmail.com:465' \
+               --ssl-reqd \
+               --mail-from "$EMAIL_FROM" \
+               --mail-rcpt "$EMAIL_TO" \
+               --user "$EMAIL_SMTP_USER:$EMAIL_SMTP_PASS" \
+               -T <(echo -e "$email_content") > /dev/null 2>&1; then
+              echo "✅ RDP trigger notification sent successfully"
+          else
+              echo "⚠️ Failed to send trigger notification (non-critical)"
+          fi
