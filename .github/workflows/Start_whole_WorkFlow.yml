@@ -43,29 +43,25 @@ jobs:
               return 1
           }
           
-          # Function to send email notification
-          send_email_notification() {
-              local subject="$1"
-              local body="$2"
+          # Function to send Telegram notification
+          send_telegram_notification() {
+              local message="$1"
               
-              if [ -z "$EMAIL_SMTP_USER" ] || [ -z "$EMAIL_SMTP_PASS" ]; then
-                  echo "⚠️ Email credentials not configured, skipping email notification"
+              if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+                  echo "⚠️ Telegram credentials not configured, skipping notification"
                   return 1
               fi
               
-              echo "Sending email notification: $subject"
-              local email_content="From: $EMAIL_FROM\nTo: $EMAIL_TO\nSubject: $subject\n\n$body"
+              echo "📱 Sending Telegram notification: $message"
               
-              if curl -s --url 'smtps://smtp.gmail.com:465' \
-                   --ssl-reqd \
-                   --mail-from "$EMAIL_FROM" \
-                   --mail-rcpt "$EMAIL_TO" \
-                   --user "$EMAIL_SMTP_USER:$EMAIL_SMTP_PASS" \
-                   -T <(echo -e "$email_content") > /dev/null 2>&1; then
-                  echo "✅ Email notification sent successfully"
+              if curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                   -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                   -d "text=${message}" \
+                   -d "parse_mode=Markdown" > /dev/null 2>&1; then
+                  echo "✅ Telegram notification sent successfully"
                   return 0
               else
-                  echo "❌ Failed to send email notification"
+                  echo "❌ Failed to send Telegram notification"
                   return 1
               fi
           }
@@ -87,16 +83,16 @@ jobs:
                   echo "🔁 Rerunning Call RDP email run ID: $run_id"
                   if gh run rerun $run_id --repo "${{ github.repository }}"; then
                       echo "✅ Call RDP email workflow triggered successfully"
-                      send_email_notification "RDP Workflow Started" "start_rdp command received! Call RDP email workflow has been triggered. RDP setup will begin shortly."
+                      send_telegram_notification "🚀 *RDP Workflow Started*\n\nstart_rdp command received! Call RDP email workflow has been triggered. RDP setup will begin shortly."
                       return 0
                   else
                       echo "❌ Failed to trigger Call RDP email workflow"
-                      send_email_notification "RDP Workflow Trigger Failed" "start_rdp command received but failed to trigger Call RDP email workflow. Manual intervention required."
+                      send_telegram_notification "❌ *RDP Workflow Trigger Failed*\n\nstart_rdp command received but failed to trigger Call RDP email workflow. Manual intervention required."
                       return 1
                   fi
               else
                   echo "❌ No Call RDP email workflow found to rerun"
-                  send_email_notification "RDP Workflow Not Found" "start_rdp command received but no Call RDP email workflow found to trigger."
+                  send_telegram_notification "❌ *RDP Workflow Not Found*\n\nstart_rdp command received but no Call RDP email workflow found to trigger."
                   return 1
               fi
           }
@@ -113,7 +109,7 @@ jobs:
                   echo "🚀 Start command detected - triggering RDP workflows"
                   if trigger_call_rdp_email; then
                       echo "🏁 Start workflow completed successfully"
-                      exit 0
+                      exit 1
                   else
                       echo "❌ Failed to trigger RDP workflows"
                       exit 1
