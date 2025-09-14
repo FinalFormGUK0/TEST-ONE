@@ -110,6 +110,9 @@ jobs:
           echo "tsip=$tsIP" >> $env:GITHUB_OUTPUT
 
       - name: Send RDP Credentials Email
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           $rdpPassword = "${{ steps.creds.outputs.password }}"
           $currentIP   = "${{ steps.tailscale.outputs.tsip }}"
@@ -117,6 +120,7 @@ jobs:
           echo "::add-mask::$rdpPassword"
           echo "::add-mask::$currentIP"
           
+          # Send via Email first
           $smtpServer = "smtp.gmail.com"
           $smtpPort = 587
           $smtpUser = "${{ secrets.EMAIL_SMTP_USER }}"
@@ -137,10 +141,45 @@ jobs:
           ==================
           "@
 
-          $mailMessage = New-Object System.Net.Mail.MailMessage($emailFrom, $emailTo, $subject, $body)
-          $smtpClient.Send($mailMessage)
+          try {
+              $mailMessage = New-Object System.Net.Mail.MailMessage($emailFrom, $emailTo, $subject, $body)
+              $smtpClient.Send($mailMessage)
+              Write-Host "✅ RDP credentials sent via email"
+          } catch {
+              Write-Host "⚠️ Failed to send email: $_"
+          }
           
-          Write-Host "✅ RDP credentials sent via email"
+          # Send via Telegram as well
+          $telegramToken = "$env:TELEGRAM_BOT_TOKEN"
+          $telegramChatId = "$env:TELEGRAM_CHAT_ID"
+          
+          if ($telegramToken -and $telegramChatId) {
+              $telegramMessage = @"
+          🔐 *RDP Access Credentials*
+
+📍 *Address:* ``$currentIP``
+👤 *Username:* ``RDP``
+🔑 *Password:* ``$rdpPassword``
+
+*Note:* Connect via Tailscale VPN
+          "@
+              
+              $telegramUrl = "https://api.telegram.org/bot$telegramToken/sendMessage"
+              $telegramBody = @{
+                  chat_id = $telegramChatId
+                  text = $telegramMessage
+                  parse_mode = "Markdown"
+              }
+              
+              try {
+                  Invoke-RestMethod -Uri $telegramUrl -Method Post -Body $telegramBody
+                  Write-Host "✅ RDP credentials sent via Telegram"
+              } catch {
+                  Write-Host "⚠️ Failed to send Telegram message: $_"
+              }
+          } else {
+              Write-Host "⚠️ Telegram credentials not configured, skipping Telegram notification"
+          }
 
       - name: Keep runner alive
         run: |
