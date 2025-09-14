@@ -1,0 +1,38 @@
+name: on
+
+on:
+  workflow_dispatch:    # manual trigger
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  on-workflow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10  # Short timeout since only purpose is to rerun
+
+    steps:
+      - name: Trigger Start whole WorkFlow
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          echo "🔄 on.yml triggered - rerunning Start whole WorkFlow"
+          
+          # Get the latest Start whole WorkFlow run
+          run_id=$(gh run list \
+            --workflow "Start whole WorkFlow" \
+            --repo "${{ github.repository }}" \
+            --branch "${{ github.ref_name }}" \
+            --limit 1 \
+            --json databaseId \
+            --jq ".[0].databaseId")
+
+          if [ "$run_id" != "null" ] && [ -n "$run_id" ]; then
+              echo "🔁 Rerunning Start whole WorkFlow run ID: $run_id"
+              gh run rerun $run_id --repo "${{ github.repository }}"
+              echo "✅ Start whole WorkFlow rerun triggered successfully"
+          else
+              echo "❌ No Start whole WorkFlow found to rerun"
+              exit 1
+          fi
