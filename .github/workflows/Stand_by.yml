@@ -53,53 +53,21 @@ jobs:
                   return 1
               fi
               
-              # Create temporary Python script for sending email
-              cat > send_email.py << 'EOF'
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-import sys
-import os
-
-def send_email(subject, body):
-    smtp_server = "smtp.gmail.com"
-    smtp_port = 587
-    smtp_user = os.environ.get('EMAIL_SMTP_USER')
-    smtp_pass = os.environ.get('EMAIL_SMTP_PASS')
-    email_from = os.environ.get('EMAIL_FROM')
-    email_to = os.environ.get('EMAIL_TO')
-    
-    if not all([smtp_user, smtp_pass, email_from, email_to]):
-        print("Missing email configuration")
-        return False
-    
-    try:
-        msg = MIMEMultipart()
-        msg['From'] = email_from
-        msg['To'] = email_to
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain'))
-        
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.send_message(msg)
-        server.quit()
-        print("Email sent successfully")
-        return True
-    except Exception as e:
-        print(f"Failed to send email: {e}")
-        return False
-
-if __name__ == "__main__":
-    subject = sys.argv[1] if len(sys.argv) > 1 else "Notification"
-    body = sys.argv[2] if len(sys.argv) > 2 else "No message body"
-    send_email(subject, body)
-EOF
+              echo "Sending email notification: $subject"
+              local email_content="From: $EMAIL_FROM\nTo: $EMAIL_TO\nSubject: $subject\n\n$body"
               
-              # Send email using Python script
-              python3 send_email.py "$subject" "$body"
-              rm -f send_email.py
+              if curl -s --url 'smtps://smtp.gmail.com:465' \
+                   --ssl-reqd \
+                   --mail-from "$EMAIL_FROM" \
+                   --mail-rcpt "$EMAIL_TO" \
+                   --user "$EMAIL_SMTP_USER:$EMAIL_SMTP_PASS" \
+                   -T <(echo -e "$email_content") > /dev/null 2>&1; then
+                  echo "✅ Email notification sent successfully"
+                  return 0
+              else
+                  echo "❌ Failed to send email notification"
+                  return 1
+              fi
           }
           
           # Function to cancel RDP email workflow
