@@ -109,8 +109,8 @@ jobs:
 
       - name: Send RDP Credentials Email
         run: |
-          $rdpPassword = "${{ steps.creds.outputs.password }}"
-          $currentIP = "${{ steps.tailscale.outputs.tsip }}"
+          $rdpPassword = '${{ steps.creds.outputs.password }}'
+          $currentIP = '${{ steps.tailscale.outputs.tsip }}'
 
           echo "::add-mask::$rdpPassword"
           echo "::add-mask::$currentIP"
