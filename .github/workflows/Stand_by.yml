@@ -1,0 +1,200 @@
+name: Stand by
+
+on:
+  workflow_dispatch:    # manual trigger
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  standby-monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours timeout
+
+    steps:
+      - name: Monitor for Stop Signal
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EMAIL_SMTP_USER: ${{ secrets.EMAIL_SMTP_USER }}
+          EMAIL_SMTP_PASS: ${{ secrets.EMAIL_SMTP_PASS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: |
+          echo "🔍 Starting 6-hour standby monitoring for 'Stop_rdp' command"
+          
+          # Function to check for stop command via Telegram
+          check_telegram_messages() {
+              if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+                  echo "⚠️ Telegram credentials not configured, skipping telegram check"
+                  return 1
+              fi
+              
+              # Get latest messages from Telegram
+              response=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?chat_id=${TELEGRAM_CHAT_ID}&limit=10")
+              
+              # Check if any message contains "Stop_rdp"
+              if echo "$response" | grep -q "Stop_rdp"; then
+                  echo "🛑 Stop_rdp command received via Telegram!"
+                  return 0
+              fi
+              return 1
+          }
+          
+          # Function to send email notification
+          send_email_notification() {
+              local subject="$1"
+              local body="$2"
+              
+              if [ -z "$EMAIL_SMTP_USER" ] || [ -z "$EMAIL_SMTP_PASS" ]; then
+                  echo "⚠️ Email credentials not configured, skipping email notification"
+                  return 1
+              fi
+              
+              # Create temporary Python script for sending email
+              cat > send_email.py << 'EOF'
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import sys
+import os
+
+def send_email(subject, body):
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587
+    smtp_user = os.environ.get('EMAIL_SMTP_USER')
+    smtp_pass = os.environ.get('EMAIL_SMTP_PASS')
+    email_from = os.environ.get('EMAIL_FROM')
+    email_to = os.environ.get('EMAIL_TO')
+    
+    if not all([smtp_user, smtp_pass, email_from, email_to]):
+        print("Missing email configuration")
+        return False
+    
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = email_from
+        msg['To'] = email_to
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+        
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+        server.quit()
+        print("Email sent successfully")
+        return True
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+        return False
+
+if __name__ == "__main__":
+    subject = sys.argv[1] if len(sys.argv) > 1 else "Notification"
+    body = sys.argv[2] if len(sys.argv) > 2 else "No message body"
+    send_email(subject, body)
+EOF
+              
+              # Send email using Python script
+              python3 send_email.py "$subject" "$body"
+              rm -f send_email.py
+          }
+          
+          # Function to cancel RDP email workflow
+          cancel_rdp_workflow() {
+              echo "🚫 Attempting to cancel RDP email workflow..."
+              
+              # Get running RDP email workflow
+              run_id=$(gh run list \
+                --workflow "RDP email" \
+                --repo "${{ github.repository }}" \
+                --branch "${{ github.ref_name }}" \
+                --status "in_progress" \
+                --limit 1 \
+                --json databaseId \
+                --jq ".[0].databaseId")
+              
+              if [ "$run_id" != "null" ] && [ -n "$run_id" ]; then
+                  echo "🛑 Canceling RDP email run ID: $run_id"
+                  if gh run cancel $run_id --repo "${{ github.repository }}"; then
+                      echo "✅ RDP workflow canceled successfully"
+                      return 0
+                  else
+                      echo "❌ Failed to cancel RDP workflow"
+                      send_email_notification "RDP Cancellation Failed" "Failed to cancel RDP email workflow (Run ID: $run_id). Manual intervention may be required."
+                      return 1
+                  fi
+              else
+                  echo "ℹ️ No running RDP email workflow found to cancel"
+                  send_email_notification "RDP Workflow Not Found" "No running RDP email workflow found to cancel when Stop_rdp command was received. The workflow may have already completed or failed."
+                  return 1
+              fi
+          }
+          
+          # Main monitoring loop - check every 10 minutes for 6 hours
+          end_time=$(($(date +%s) + 21600))  # 6 hours from now
+          
+          while [ $(date +%s) -lt $end_time ]; do
+              current_time=$(date '+%Y-%m-%d %H:%M:%S')
+              echo "💓 Standby heartbeat: $current_time"
+              
+              # Check for stop command
+              if check_telegram_messages; then
+                  echo "🛑 Stop command detected - canceling RDP and exiting"
+                  cancel_rdp_workflow
+                  
+                  # Trigger Start whole WorkFlow when Stop_rdp is received
+                  echo "🔁 Triggering Start whole WorkFlow after Stop_rdp command"
+                  start_workflow_run_id=$(gh run list \
+                    --workflow "Start whole WorkFlow" \
+                    --repo "${{ github.repository }}" \
+                    --branch "${{ github.ref_name }}" \
+                    --limit 1 \
+                    --json databaseId \
+                    --jq ".[0].databaseId")
+                  
+                  if [ "$start_workflow_run_id" != "null" ] && [ -n "$start_workflow_run_id" ]; then
+                      echo "🔁 Rerunning Start whole WorkFlow run ID: $start_workflow_run_id"
+                      gh run rerun $start_workflow_run_id --repo "${{ github.repository }}"
+                      echo "✅ Start whole WorkFlow rerun triggered after Stop_rdp"
+                  else
+                      echo "⚠️ No Start whole WorkFlow found to rerun"
+                  fi
+                  
+                  echo "🏁 Standby monitoring stopped by user command"
+                  exit 0
+              fi
+              
+              # Wait 10 minutes before next check
+              echo "⏳ Waiting 10 minutes before next check..."
+              sleep 600
+          done
+          
+          echo "⏰ 6-hour monitoring period completed without stop command"
+
+      - name: Rerun Call RDP email workflow
+        if: success()  # Only run if no stop command was received
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          echo "🔄 No stop command received, rerunning Call RDP email workflow"
+          
+          # Get the latest Call RDP email workflow run
+          run_id=$(gh run list \
+            --workflow "Call RDP email" \
+            --repo "${{ github.repository }}" \
+            --branch "${{ github.ref_name }}" \
+            --limit 1 \
+            --json databaseId \
+            --jq ".[0].databaseId")
+
+          if [ "$run_id" != "null" ] && [ -n "$run_id" ]; then
+              echo "🔁 Rerunning Call RDP email run ID: $run_id"
+              gh run rerun $run_id --repo "${{ github.repository }}"
+              echo "✅ Call RDP email workflow rerun triggered"
+          else
+              echo "❌ No Call RDP email workflow found to rerun"
+              exit 1
+          fi
