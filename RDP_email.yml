@@ -1,0 +1,149 @@
+name: RDP email
+
+on:
+  workflow_dispatch:    # manual trigger
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 1️⃣ Restore cache if it exists
+      - name: Restore cached RDP files
+        uses: actions/cache@v3
+        with:
+          path: C:\RDPTools
+          key: rdp-tools-v1
+      # 2️⃣ Create folder and add your files (only runs if cache empty)
+      - name: Prepare RDP files
+        run: |
+          if (!(Test-Path "C:\RDPTools")) {
+              New-Item -ItemType Directory -Path C:\RDPTools
+          }
+      
+          
+
+      # =====================
+      # 1. Install Apps (only if missing)
+      # =====================
+      - name: Install Brave
+        run: |
+          if (-not (Test-Path "C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe")) {
+              Invoke-WebRequest -Uri "https://laptop-updates.brave.com/latest/winx64" -OutFile brave_installer.exe
+              Start-Process brave_installer.exe -ArgumentList "/silent", "/install" -Wait
+          }
+
+      # 3️⃣ Upload to artifact (so you can download manually anytime)
+      - name: Upload RDP files as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-files
+          path: C:\RDPTools
+
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User with Secure Password
+        id: creds
+        run: |
+          Add-Type -AssemblyName System.Security
+          $charSet = @{
+              Upper   = [char[]](65..90)
+              Lower   = [char[]](97..122)
+              Number  = [char[]](48..57)
+              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
+          }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper   | Get-Random -Count 4
+          $rawPassword += $charSet.Lower   | Get-Random -Count 4
+          $rawPassword += $charSet.Number  | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          echo "::add-mask::$password"
+          echo "password=$password" >> $env:GITHUB_OUTPUT
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        id: tailscale
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "::add-mask::$tsIP"
+          echo "tsip=$tsIP" >> $env:GITHUB_OUTPUT
+
+      - name: Send RDP Credentials Email
+        run: |
+          $rdpPassword = "${{ steps.creds.outputs.password }}"
+          $currentIP   = "${{ steps.tailscale.outputs.tsip }}"
+
+          echo "::add-mask::$rdpPassword"
+          echo "::add-mask::$currentIP"
+          
+          $smtpServer = "smtp.gmail.com"
+          $smtpPort = 587
+          $smtpUser = "${{ secrets.EMAIL_SMTP_USER }}"
+          $smtpPass = "${{ secrets.EMAIL_SMTP_PASS }}"
+          $emailFrom = "${{ secrets.EMAIL_FROM }}"
+          $emailTo = "${{ secrets.EMAIL_TO }}"
+          $subject = "RDP Access Credentials"
+
+          $smtpClient = New-Object System.Net.Mail.SmtpClient($smtpServer, $smtpPort)
+          $smtpClient.EnableSsl = $true
+          $smtpClient.Credentials = New-Object System.Net.NetworkCredential($smtpUser, $smtpPass)
+          
+          $body = @"
+          === RDP ACCESS ===
+          Address: $currentIP
+          Username: RDP
+          Password: $rdpPassword
+          ==================
+          "@
+
+          $mailMessage = New-Object System.Net.Mail.MailMessage($emailFrom, $emailTo, $subject, $body)
+          $smtpClient.Send($mailMessage)
+          
+          Write-Host "✅ RDP credentials sent via email"
+
+      - name: Keep runner alive
+        run: |
+          Write-Host "🟢 RDP server is ready and accessible via Tailscale"
+          Write-Host "📧 Credentials have been sent to your email"
+          Write-Host "⏳ Runner will stay alive for the duration of the workflow timeout"
+          
+          # Keep the runner alive without complex monitoring
+          # Rely on Tailscale's native connection handling
+          while ($true) {
+              Start-Sleep -Seconds 600  # Sleep for 10 minutes
+              Write-Host "💓 Runner heartbeat: $(Get-Date)"
+          }
