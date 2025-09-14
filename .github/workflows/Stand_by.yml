@@ -18,30 +18,9 @@ jobs:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          EMAIL_SMTP_USER: ${{ secrets.EMAIL_SMTP_USER }}
-          EMAIL_SMTP_PASS: ${{ secrets.EMAIL_SMTP_PASS }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
           echo "🔍 Starting 6-hour standby monitoring for 'Stop_rdp' command"
-          
-          # Function to check for stop command via Telegram
-          check_telegram_messages() {
-              if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-                  echo "⚠️ Telegram credentials not configured, skipping telegram check"
-                  return 1
-              fi
-              
-              # Get latest messages from Telegram
-              response=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?chat_id=${TELEGRAM_CHAT_ID}&limit=10")
-              
-              # Check if any message contains "Stop_rdp"
-              if echo "$response" | grep -q "Stop_rdp"; then
-                  echo "🛑 Stop_rdp command received via Telegram!"
-                  return 0
-              fi
-              return 1
-          }
+          echo "📡 Note: Using webhook-based detection (no polling needed)"
           
           # Function to send Telegram notification
           send_telegram_notification() {
@@ -66,6 +45,24 @@ jobs:
               fi
           }
           
+          # Function to check for stop command via Telegram (legacy polling as backup)
+          check_telegram_messages() {
+              if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+                  echo "⚠️ Telegram credentials not configured, skipping telegram check"
+                  return 1
+              fi
+              
+              # Get latest messages from Telegram
+              response=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?chat_id=${TELEGRAM_CHAT_ID}&limit=10")
+              
+              # Check if any message contains "Stop_rdp"
+              if echo "$response" | grep -q "Stop_rdp"; then
+                  echo "🛑 Stop_rdp command received via Telegram!"
+                  return 0
+              fi
+              return 1
+          }
+          
           # Function to cancel RDP email workflow
           cancel_rdp_workflow() {
               echo "🚫 Attempting to cancel RDP email workflow..."
@@ -87,26 +84,26 @@ jobs:
                       return 0
                   else
                       echo "❌ Failed to cancel RDP workflow"
-                      send_telegram_notification "🚫 *RDP Cancellation Failed*\n\nFailed to cancel RDP email workflow (Run ID: $run_id). Manual intervention may be required."
+                      send_telegram_notification "🚫 *RDP Cancellation Failed*\\n\\nFailed to cancel RDP email workflow (Run ID: $run_id). Manual intervention may be required."
                       return 1
                   fi
               else
                   echo "ℹ️ No running RDP email workflow found to cancel"
-                  send_telegram_notification "ℹ️ *RDP Workflow Not Found*\n\nNo running RDP email workflow found to cancel when Stop_rdp command was received. The workflow may have already completed or failed."
+                  send_telegram_notification "ℹ️ *RDP Workflow Not Found*\\n\\nNo running RDP email workflow found to cancel when Stop_rdp command was received. The workflow may have already completed or failed."
                   return 1
               fi
           }
           
-          # Main monitoring loop - check every 10 minutes for 6 hours
+          # Main monitoring loop - check every 2 minutes for 6 hours (webhook will handle most cases)
           end_time=$(($(date +%s) + 21600))  # 6 hours from now
           
           while [ $(date +%s) -lt $end_time ]; do
               current_time=$(date '+%Y-%m-%d %H:%M:%S')
               echo "💓 Standby heartbeat: $current_time"
               
-              # Check for stop command
+              # Check for stop command (backup polling - webhook is primary)
               if check_telegram_messages; then
-                  echo "🛑 Stop command detected - canceling RDP and exiting"
+                  echo "🛑 Stop command detected via polling - canceling RDP and exiting"
                   cancel_rdp_workflow
                   
                   # Trigger Start whole WorkFlow when Stop_rdp is received
@@ -131,9 +128,9 @@ jobs:
                   exit 1  # Exit with failure status to prevent next step from running
               fi
               
-              # Wait 10 minutes before next check
-              echo "⏳ Waiting 10 minutes before next check..."
-              sleep 600
+              # Wait 2 minutes before next check (reduced from 10 minutes)
+              echo "⏳ Waiting 2 minutes before next check..."
+              sleep 120
           done
           
           echo "⏰ 6-hour monitoring period completed without stop command"
