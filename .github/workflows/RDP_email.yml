@@ -44,6 +44,13 @@ jobs:
           name: rdp-files
           path: C:\RDPTools
 
+      # 4️⃣ Save cache for future runs
+      - name: Save RDP tools cache
+        uses: actions/cache/save@v3
+        with:
+          path: C:\RDPTools
+          key: rdp-tools-v1
+
       - name: Configure Core RDP Settings
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
