@@ -24,8 +24,6 @@ jobs:
           if (!(Test-Path "C:\RDPTools")) {
               New-Item -ItemType Directory -Path C:\RDPTools
           }
-      
-          
 
       # =====================
       # 1. Install Apps (only if missing)
@@ -110,17 +108,14 @@ jobs:
           echo "tsip=$tsIP" >> $env:GITHUB_OUTPUT
 
       - name: Send RDP Credentials Email
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           $rdpPassword = "${{ steps.creds.outputs.password }}"
-          $currentIP   = "${{ steps.tailscale.outputs.tsip }}"
+          $currentIP = "${{ steps.tailscale.outputs.tsip }}"
 
           echo "::add-mask::$rdpPassword"
           echo "::add-mask::$currentIP"
           
-          # Send via Email first
+          # Send via Email
           $smtpServer = "smtp.gmail.com"
           $smtpPort = 587
           $smtpUser = "${{ secrets.EMAIL_SMTP_USER }}"
@@ -147,38 +142,6 @@ jobs:
               Write-Host "✅ RDP credentials sent via email"
           } catch {
               Write-Host "⚠️ Failed to send email: $_"
-          }
-          
-          # Send via Telegram as well
-          $telegramToken = "$env:TELEGRAM_BOT_TOKEN"
-          $telegramChatId = "$env:TELEGRAM_CHAT_ID"
-          
-          if ($telegramToken -and $telegramChatId) {
-              $telegramMessage = @"
-          🔐 *RDP Access Credentials*
-
-📍 *Address:* ``$currentIP``
-👤 *Username:* ``RDP``
-🔑 *Password:* ``$rdpPassword``
-
-*Note:* Connect via Tailscale VPN
-          "@
-              
-              $telegramUrl = "https://api.telegram.org/bot$telegramToken/sendMessage"
-              $telegramBody = @{
-                  chat_id = $telegramChatId
-                  text = $telegramMessage
-                  parse_mode = "Markdown"
-              }
-              
-              try {
-                  Invoke-RestMethod -Uri $telegramUrl -Method Post -Body $telegramBody
-                  Write-Host "✅ RDP credentials sent via Telegram"
-              } catch {
-                  Write-Host "⚠️ Failed to send Telegram message: $_"
-              }
-          } else {
-              Write-Host "⚠️ Telegram credentials not configured, skipping Telegram notification"
           }
 
       - name: Keep runner alive
