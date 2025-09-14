@@ -13,35 +13,13 @@ jobs:
     timeout-minutes: 360  # 6 hours timeout
 
     steps:
-      - name: Monitor for Start Signal
+      - name: Start RDP Workflow
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          EMAIL_SMTP_USER: ${{ secrets.EMAIL_SMTP_USER }}
-          EMAIL_SMTP_PASS: ${{ secrets.EMAIL_SMTP_PASS }}
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
-          echo "🔍 Starting 6-hour monitoring for 'start_rdp' command"
-          
-          # Function to check for start command via Telegram
-          check_telegram_messages() {
-              if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-                  echo "⚠️ Telegram credentials not configured, skipping telegram check"
-                  return 1
-              fi
-              
-              # Get latest messages from Telegram
-              response=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?chat_id=${TELEGRAM_CHAT_ID}&limit=10")
-              
-              # Check if any message contains "start_rdp"
-              if echo "$response" | grep -q "start_rdp"; then
-                  echo "🚀 start_rdp command received via Telegram!"
-                  return 0
-              fi
-              return 1
-          }
+          echo "🚀 Webhook-triggered RDP start workflow initiated"
           
           # Function to send Telegram notification
           send_telegram_notification() {
@@ -83,59 +61,36 @@ jobs:
                   echo "🔁 Rerunning Call RDP email run ID: $run_id"
                   if gh run rerun $run_id --repo "${{ github.repository }}"; then
                       echo "✅ Call RDP email workflow triggered successfully"
-                      send_telegram_notification "🚀 *RDP Workflow Started*\n\nstart_rdp command received! Call RDP email workflow has been triggered. RDP setup will begin shortly."
+                      send_telegram_notification "🚀 *RDP Workflow Started*\\n\\nCall RDP email workflow has been triggered. RDP setup will begin shortly."
                       return 0
                   else
                       echo "❌ Failed to trigger Call RDP email workflow"
-                      send_telegram_notification "❌ *RDP Workflow Trigger Failed*\n\nstart_rdp command received but failed to trigger Call RDP email workflow. Manual intervention required."
+                      send_telegram_notification "❌ *RDP Workflow Trigger Failed*\\n\\nFailed to trigger Call RDP email workflow. Manual intervention required."
                       return 1
                   fi
               else
                   echo "❌ No Call RDP email workflow found to rerun"
-                  send_telegram_notification "❌ *RDP Workflow Not Found*\n\nstart_rdp command received but no Call RDP email workflow found to trigger."
+                  send_telegram_notification "❌ *RDP Workflow Not Found*\\n\\nNo Call RDP email workflow found to trigger."
                   return 1
               fi
           }
           
-          # Main monitoring loop - check every 10 minutes for 6 hours
-          end_time=$(($(date +%s) + 21600))  # 6 hours from now
-          
-          while [ $(date +%s) -lt $end_time ]; do
-              current_time=$(date '+%Y-%m-%d %H:%M:%S')
-              echo "💓 Start workflow heartbeat: $current_time"
-              
-              # Check for start command
-              if check_telegram_messages; then
-                  echo "🚀 Start command detected - triggering RDP workflows"
-                  if trigger_call_rdp_email; then
-                      echo "🏁 Start workflow completed successfully"
-                      exit 1
-                  else
-                      echo "❌ Failed to trigger RDP workflows"
-                      exit 1
-                  fi
-              fi
-              
-              # Check if we're in the last 5 minutes (5:55 mark)
-              remaining_time=$((end_time - $(date +%s)))
-              if [ $remaining_time -le 300 ]; then  # 300 seconds = 5 minutes
-                  echo "⏰ Less than 5 minutes remaining, will trigger on.yml"
-                  break
-              fi
-              
-              # Wait 10 minutes before next check
-              echo "⏳ Waiting 10 minutes before next check..."
-              sleep 600
-          done
-          
-          echo "⏰ 6-hour monitoring period completed without start command"
+          # Directly trigger RDP workflow (no more polling needed)
+          echo "🚀 start_rdp command received via webhook - triggering RDP workflows"
+          if trigger_call_rdp_email; then
+              echo "🏁 Start workflow completed successfully"
+              exit 0  # Success - don't trigger on.yml
+          else
+              echo "❌ Failed to trigger RDP workflows"
+              exit 1
+          fi
 
-      - name: Trigger on.yml workflow
-        if: success()  # Only run if no start command was received
+      - name: Fallback - Trigger on.yml workflow
+        if: failure()  # Only run if start workflow failed
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          echo "🔄 No start command received, triggering on.yml workflow"
+          echo "🔄 RDP trigger failed, triggering on.yml workflow as fallback"
           
           # Get the latest on.yml workflow run
           run_id=$(gh run list \
@@ -152,5 +107,4 @@ jobs:
               echo "✅ on.yml workflow rerun triggered"
           else
               echo "❌ No on.yml workflow found to rerun"
-              exit 1
           fi
