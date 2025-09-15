@@ -118,7 +118,7 @@ jobs:
           
           while [ $(date +%s) -lt $end_time ]; do
               current_time=$(date '+%Y-%m-%d %H:%M:%S')
-              echo "💓 Standby heartbeat: $current_time"
+              echo "Standby: $current_time"
               
               # Check for stop command (backup polling - webhook is primary)
               if check_telegram_messages; then
