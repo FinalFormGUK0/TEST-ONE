@@ -91,7 +91,7 @@ jobs:
               fi
           }
                     
-          echo "⏳ Waiting for start_rdp message (max 6h)..."
+                  echo "⏳ Waiting for start_rdp message (max 6h)..."
           
           MAX_WAIT=$((360 * 60 - 300))  # wait 5h55m (leave 5 min buffer before GitHub kills job)
           INTERVAL=60                   # check every 1 min
@@ -99,12 +99,20 @@ jobs:
           message_received=false
           
           while [ $waited -lt $MAX_WAIT ]; do
-              # Poll Telegram for /start_rdp command
-              updates=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=-1")
-              
+              # Poll Telegram for /start_rdp command (fetch ALL updates, not just last one)
+              updates=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates")
+          
               if echo "$updates" | grep -q "\"text\":\"/start_rdp\""; then
                   echo "🚀 /start_rdp command detected from Telegram!"
                   message_received=true
+          
+                  # ✅ Send confirmation back to Telegram
+                  send_telegram_notification "📩 *Command received:* /start_rdp%0A➡️ Triggering Call RDP email workflow..."
+          
+                  # Optional: mark messages as read (so the same /start_rdp won’t retrigger)
+                  last_update_id=$(echo "$updates" | jq '.result[-1].update_id')
+                  curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=$((last_update_id+1))" > /dev/null
+          
                   break
               fi
           
@@ -112,6 +120,7 @@ jobs:
               sleep $INTERVAL
               waited=$((waited + INTERVAL))
           done
+
 
 
 
