@@ -139,9 +139,9 @@ jobs:
           try {
               $mailMessage = New-Object System.Net.Mail.MailMessage($emailFrom, $emailTo, $subject, $body)
               $smtpClient.Send($mailMessage)
-              Write-Host "✅ RDP credentials sent via email"
+              Write-Host "RDP sent"
           } catch {
-              Write-Host "⚠️ Failed to send email: $_"
+              Write-Host "Failed to send email: $_"
           }
 
       - name: Send RDP Ready Notification via Telegram
@@ -189,7 +189,7 @@ jobs:
                   }
               }
               
-              Write-Host "❌ Failed to send Telegram notification after $MaxRetries attempts"
+              Write-Host "Failed to send Telegram notification after $MaxRetries attempts"
               return $false
           }
           
@@ -209,13 +209,11 @@ jobs:
 
       - name: Keep runner alive
         run: |
-          Write-Host "🟢 RDP server is ready and accessible via Tailscale"
-          Write-Host "📧 Credentials have been sent to your email"
-          Write-Host "⏳ Runner will stay alive for the duration of the workflow timeout"
+          Write-Host "Running"
           
           # Keep the runner alive without complex monitoring
           # Rely on Tailscale's native connection handling
           while ($true) {
               Start-Sleep -Seconds 600  # Sleep for 10 minutes
-              Write-Host "💓 Runner heartbeat: $(Get-Date)"
+              Write-Host "Runner: $(Get-Date)"
           }
