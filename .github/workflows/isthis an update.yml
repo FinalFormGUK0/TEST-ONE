@@ -1,0 +1,174 @@
+# Polling-based RDP Start Monitor Workflow
+# This workflow actively polls Telegram for "Start_rdp" commands
+# and triggers the RDP setup process when detected.
+# Monitor runs for 6 hours with 30-second polling intervals.
+
+name: Start whole WorkFlow
+
+on:
+  workflow_dispatch:    # manual trigger
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  workflow-initiator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours timeout
+
+    steps:
+      - name: Monitor for Start RDP Command
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          echo "🔍 Starting polling-based monitoring for 'Start_rdp' command"
+          echo "📱 Listening for Telegram commands..."
+          
+          # Function to send Telegram notification
+          send_telegram_notification() {
+              local message="$1"
+              local max_retries=3
+              local retry_count=0
+              
+              if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+                  echo "⚠️ Telegram credentials not configured, skipping notification"
+                  return 1
+              fi
+              
+              while [ $retry_count -lt $max_retries ]; do
+                  echo "📱 Attempt $((retry_count + 1)): Sending Telegram notification"
+                  
+                  response=$(curl -s -w "%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                       -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                       -d "text=${message}" \
+                       -d "parse_mode=Markdown" \
+                       -d "disable_web_page_preview=true")
+                  
+                  http_code="${response: -3}"
+                  
+                  if [ "$http_code" = "200" ]; then
+                      echo "✅ Telegram notification sent successfully"
+                      return 0
+                  else
+                      echo "❌ Failed to send notification (HTTP: $http_code)"
+                      if [ $retry_count -lt $((max_retries - 1)) ]; then
+                          echo "⏳ Retrying in 3 seconds..."
+                          sleep 3
+                      fi
+                  fi
+                  retry_count=$((retry_count + 1))
+              done
+              
+              echo "❌ Failed to send Telegram notification after $max_retries attempts"
+              return 1
+          }
+          
+          # Function to check for start command via Telegram
+          check_telegram_start_messages() {
+              if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+                  echo "⚠️ Telegram credentials not configured, skipping telegram check"
+                  return 1
+              fi
+              
+              # Get latest messages from Telegram (last 10 messages)
+              response=$(curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?chat_id=${TELEGRAM_CHAT_ID}&limit=10&timeout=10")
+              
+              # Enhanced parsing - check for various start command formats
+              if echo "$response" | grep -iE "(Start_rdp|start_rdp|START_RDP|start rdp|Start RDP)"; then
+                  echo "🚀 Start_rdp command received via Telegram!"
+                  
+                  # Send acknowledgment
+                  send_telegram_notification "🚀 *Start Command Received*\\n\\n✅ Processing start request...\\n🔄 Initializing RDP workflow\\n⏳ Please wait..."
+                  return 0
+              fi
+              return 1
+          }
+          
+          # Function to trigger Call RDP email workflow
+          trigger_call_rdp_email() {
+              echo "🔁 Triggering Call RDP email workflow..."
+              
+              # Get the latest Call RDP email workflow run
+              run_id=$(gh run list \
+                --workflow "Call RDP email" \
+                --repo "${{ github.repository }}" \
+                --branch "${{ github.ref_name }}" \
+                --limit 1 \
+                --json databaseId \
+                --jq ".[0].databaseId")
+
+              if [ "$run_id" != "null" ] && [ -n "$run_id" ]; then
+                  echo "🔁 Rerunning Call RDP email run ID: $run_id"
+                  if gh run rerun $run_id --repo "${{ github.repository }}"; then
+                      echo "✅ Call RDP email workflow triggered successfully"
+                      send_telegram_notification "🚀 *RDP Workflow Started*\\n\\n✅ Call RDP email workflow triggered\\n✅ RDP server setup initiated\\n\\n📧 *Next:* Wait for email with RDP credentials\\n🔗 *Monitor:* [GitHub Actions](https://github.com/${{ github.repository }}/actions)"
+                      return 0
+                  else
+                      echo "❌ Failed to trigger Call RDP email workflow"
+                      send_telegram_notification "❌ *RDP Workflow Failed*\\n\\n❌ Failed to trigger Call RDP email workflow\\n\\n🔧 *Action:* Check [GitHub Actions logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})\\n🔄 *Fallback:* Trying alternative startup method..."
+                      return 1
+                  fi
+              else
+                  echo "❌ No Call RDP email workflow found to rerun"
+                  send_telegram_notification "❌ *RDP Workflow Not Found*\\n\\n⚠️ No Call RDP email workflow available\\n\\n🔧 *Solution:* Try running workflows manually from [GitHub Actions](https://github.com/${{ github.repository }}/actions)"
+                  return 1
+              fi
+          }
+          
+          # Send initial monitoring notification
+          send_telegram_notification "🔍 *RDP Monitor Active*\\n\\n✅ Listening for start commands\\n⏰ Monitor duration: 6 hours\\n\\n📱 *To start RDP:*\\n• Send \\`Start_rdp\\` to this chat\\n• Various formats accepted\\n\\n🚫 *To stop monitoring:*\\n• Cancel this workflow manually"
+          
+          # Main monitoring loop - check every 30 seconds for 6 hours
+          end_time=$(($(date +%s) + 21600))  # 6 hours from now
+          check_interval=30  # 30 seconds between checks
+          
+          while [ $(date +%s) -lt $end_time ]; do
+              current_time=$(date '+%Y-%m-%d %H:%M:%S')
+              echo "📲 Monitor heartbeat: $current_time"
+              
+              # Check for start command
+              if check_telegram_start_messages; then
+                  echo "🚀 Start command detected - triggering RDP workflows"
+                  if trigger_call_rdp_email; then
+                      echo "🏁 RDP workflow started successfully"
+                      exit 0  # Success - RDP started
+                  else
+                      echo "❌ Failed to trigger RDP workflows, continuing monitoring..."
+                      send_telegram_notification "❌ *RDP Start Failed*\\n\\n⚠️ Failed to start RDP workflow\\n🔄 Continuing to monitor for retry\\n\\n📱 Send \\`Start_rdp\\` again to retry"
+                  fi
+              fi
+              
+              # Wait before next check
+              echo "⏳ Waiting $check_interval seconds before next check..."
+              sleep $check_interval
+          done
+          
+          echo "⏰ 6-hour monitoring period completed without start command"
+          send_telegram_notification "⏰ *RDP Monitor Timeout*\\n\\nℹ️ 6-hour monitoring period completed\\n❌ No start command received\\n🚫 Monitor session ended\\n\\n🔄 *To restart monitoring:*\\n• Run this workflow again manually"
+
+      - name: Fallback - Trigger on.yml workflow
+        if: failure()  # Only run if start workflow failed
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          echo "🔄 RDP trigger failed, triggering on.yml workflow as fallback"
+          
+          # Get the latest on.yml workflow run
+          run_id=$(gh run list \
+            --workflow "on" \
+            --repo "${{ github.repository }}" \
+            --branch "${{ github.ref_name }}" \
+            --limit 1 \
+            --json databaseId \
+            --jq ".[0].databaseId")
+
+          if [ "$run_id" != "null" ] && [ -n "$run_id" ]; then
+              echo "🔁 Rerunning on workflow run ID: $run_id"
+              gh run rerun $run_id --repo "${{ github.repository }}"
+              echo "✅ on.yml workflow rerun triggered"
+          else
+              echo "❌ No on.yml workflow found to rerun"
+          fi
