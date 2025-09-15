@@ -79,14 +79,58 @@ jobs:
               exit 0
           fi
           
-          # Send notification using Telegram API
-          message="🚀 *RDP Successfully Triggered*\n\nRDP workflows have been successfully triggered. Please wait for the RDP access codes to be sent to your email. The system will monitor for 6 hours or until you send 'Stop_rdp' via Telegram."
+          # Function to send Telegram notification with retry logic
+          send_telegram_notification() {
+              local message="$1"
+              local max_retries=3
+              local retry_count=0
+              
+              while [ $retry_count -lt $max_retries ]; do
+                  echo "📱 Attempt $((retry_count + 1)): Sending Telegram notification"
+                  
+                  response=$(curl -s -w "%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                       -d "chat_id=${TELEGRAM_CHAT_ID}" \
+                       -d "text=${message}" \
+                       -d "parse_mode=Markdown" \
+                       -d "disable_web_page_preview=true")
+                  
+                  http_code="${response: -3}"
+                  response_body="${response%???}"
+                  
+                  if [ "$http_code" = "200" ]; then
+                      echo "✅ Telegram notification sent successfully"
+                      return 0
+                  else
+                      echo "❌ Failed to send notification (HTTP: $http_code)"
+                      if [ $retry_count -lt $((max_retries - 1)) ]; then
+                          echo "⏳ Retrying in 5 seconds..."
+                          sleep 5
+                      fi
+                  fi
+                  retry_count=$((retry_count + 1))
+              done
+              
+              echo "❌ Failed to send Telegram notification after $max_retries attempts"
+              return 1
+          }
           
-          if curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-               -d "chat_id=${TELEGRAM_CHAT_ID}" \
-               -d "text=${message}" \
-               -d "parse_mode=Markdown" > /dev/null 2>&1; then
-              echo "✅ RDP trigger notification sent successfully via Telegram"
+          # Determine workflow status
+          rdp_status="${{ steps.last_run.outputs.last_run_id != '' && 'success' || 'failed' }}"
+          standby_status="${{ steps.standby_run.outputs.standby_run_id != '' && 'success' || 'failed' }}"
+          
+          # Create detailed status message
+          if [ "$rdp_status" = "success" ] && [ "$standby_status" = "success" ]; then
+              message="🚀 *RDP Successfully Triggered*\n\n✅ RDP Server: Starting up\n✅ Monitoring: Active for 6 hours\n\n📧 *Next Steps:*\n• RDP credentials will be sent to your email\n• Wait for email with connection details\n• Use Tailscale IP to connect\n\n🛑 *To Stop:* Send \`Stop_rdp\` to this chat\n\n🔗 *GitHub Actions:* [View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           else
-              echo "⚠️ Failed to send trigger notification via Telegram (non-critical)"
+              message="❌ *RDP Trigger Failed*\n\n"
+              if [ "$rdp_status" = "failed" ]; then
+                  message="${message}❌ RDP Server: Failed to start\n"
+              fi
+              if [ "$standby_status" = "failed" ]; then
+                  message="${message}❌ Monitoring: Failed to start\n"
+              fi
+              message="${message}\n🔧 *Action Required:* Check [GitHub Actions logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details"
           fi
+          
+          # Send the notification
+          send_telegram_notification "$message"
