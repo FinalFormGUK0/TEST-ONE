@@ -144,6 +144,69 @@ jobs:
               Write-Host "⚠️ Failed to send email: $_"
           }
 
+      - name: Send RDP Ready Notification via Telegram
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          # Function to send Telegram notification
+          function Send-TelegramNotification {
+              param(
+                  [string]$Message,
+                  [int]$MaxRetries = 3
+              )
+              
+              if (-not $env:TELEGRAM_BOT_TOKEN -or -not $env:TELEGRAM_CHAT_ID) {
+                  Write-Host "⚠️ Telegram credentials not configured, skipping notification"
+                  return $false
+              }
+              
+              for ($i = 1; $i -le $MaxRetries; $i++) {
+                  Write-Host "📱 Attempt $i`: Sending Telegram notification"
+                  
+                  try {
+                      $response = Invoke-RestMethod -Uri "https://api.telegram.org/bot$env:TELEGRAM_BOT_TOKEN/sendMessage" `
+                          -Method POST `
+                          -Body @{
+                              chat_id = $env:TELEGRAM_CHAT_ID
+                              text = $Message
+                              parse_mode = "Markdown"
+                              disable_web_page_preview = $true
+                          } `
+                          -ContentType "application/x-www-form-urlencoded"
+                      
+                      if ($response.ok) {
+                          Write-Host "✅ Telegram notification sent successfully"
+                          return $true
+                      }
+                  } catch {
+                      Write-Host "❌ Failed to send notification (Attempt $i): $($_.Exception.Message)"
+                      if ($i -lt $MaxRetries) {
+                          Write-Host "⏳ Retrying in 3 seconds..."
+                          Start-Sleep -Seconds 3
+                      }
+                  }
+              }
+              
+              Write-Host "❌ Failed to send Telegram notification after $MaxRetries attempts"
+              return $false
+          }
+          
+          # Determine message based on previous steps
+          $tailscaleIP = '${{ steps.tailscale.outputs.tsip }}'
+          $emailSent = '${{ steps.send_credentials.outputs.email_sent }}' -eq 'true'
+          
+          if ($tailscaleIP -and $emailSent) {
+              $message = "🎉 *RDP Server Ready!*`n`n✅ Server Status: Online`n✅ Credentials: Sent to email`n✅ VPN: Connected via Tailscale`n`n📧 *Next Steps:*`n• Check your email for connection details`n• Connect using Remote Desktop`n• Use Tailscale IP for secure access`n`n⏰ *Session Info:*`n• Duration: Up to 6 hours`n• To stop: Send \`Stop_rdp\` to this chat`n`n🔗 [Monitor Session](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } elseif ($tailscaleIP) {
+              $message = "⚠️ *RDP Server Partial Setup*`n`n✅ Server Status: Online`n❌ Credentials: Email failed`n✅ VPN: Connected`n`n📧 **Manual Credentials:**`n• IP: \`[MASKED]\``n• Username: \`RDP\``n• Password: \`[Check GitHub Actions logs]\``n`n🔧 [View Full Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          } else {
+              $message = "❌ *RDP Server Setup Failed*`n`n❌ Server Status: Failed`n❌ Network: Tailscale connection failed`n`n🔧 **Troubleshooting:**`n• Check Tailscale auth key`n• Verify network connectivity`n• Review error logs`n`n🔗 [View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          }
+          
+          Send-TelegramNotification -Message $message
+
       - name: Keep runner alive
         run: |
           Write-Host "🟢 RDP server is ready and accessible via Tailscale"
