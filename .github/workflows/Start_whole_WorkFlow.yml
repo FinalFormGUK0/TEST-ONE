@@ -129,27 +129,32 @@ jobs:
               if [ "$run_id" != "null" ] && [ -n "$run_id" ]; then
                   echo "🔁 Rerunning Call RDP email run ID: $run_id"
                   gh run rerun $run_id --repo "${{ github.repository }}"
+                  send_telegram_notification "✅ *RDP Triggered Successfully*%0AThe Call RDP email workflow has been started.%0A🔗 [Check Actions](https://github.com/${{ github.repository }}/actions)"
               else
                   echo "❌ No Call RDP email workflow found to rerun"
+                  send_telegram_notification "❌ *Failed* — No Call RDP email workflow found."
               fi
-          else
-              echo "⚠️ No start_rdp received before timeout, triggering on.yml fallback..."
-              run_id=$(gh run list \
-                --workflow "on" \
-                --repo "${{ github.repository }}" \
-                --branch "${{ github.ref_name }}" \
-                --limit 1 \
-                --json databaseId \
-                --jq ".[0].databaseId")
           
-              if [ "$run_id" != "null" ] && [ -n "$run_id" ]; then
-                  echo "🔁 Rerunning on workflow run ID: $run_id"
-                  gh run rerun $run_id --repo "${{ github.repository }}"
-                  echo "✅ on.yml workflow rerun triggered"
-              else
-                  echo "❌ No on.yml workflow found to rerun"
-              fi
+                  else
+          echo "⚠️ No start_rdp received before timeout, triggering on.yml fallback..."
+          run_id=$(gh run list \
+            --workflow "on" \
+            --repo "${{ github.repository }}" \
+            --branch "${{ github.ref_name }}" \
+            --limit 1 \
+            --json databaseId \
+            --jq ".[0].databaseId")
+      
+          if [ "$run_id" != "null" ] && [ -n "$run_id" ]; then
+              echo "🔁 Rerunning on workflow run ID: $run_id"
+              gh run rerun $run_id --repo "${{ github.repository }}"
+              echo "✅ on.yml workflow rerun triggered"
+              send_telegram_notification "⚠️ *No /start_rdp received in 6h*%0A➡️ Triggered *on.yml* workflow instead.%0A🔗 [Check Actions](https://github.com/${{ github.repository }}/actions)"
+          else
+              echo "❌ No on.yml workflow found to rerun"
+              send_telegram_notification "❌ *Failed* — No on.yml workflow found to rerun."
           fi
+      fi
 
 
      
